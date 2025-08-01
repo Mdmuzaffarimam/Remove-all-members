@@ -1,3 +1,5 @@
+Flask
+gunicorn
 pyrofork
-TgCrypto
 python-dotenv
+TgCrypto

@@ -12,7 +12,11 @@
       "API_HASH": {
         "description": "Get this value from https://my.telegram.org",
         "value": ""
-  }
+      },
+      "UNBAN_USERS": {
+        "description": "Set to 'true' to enable unbanning users from groups.",
+        "value": "false"
+      }
     },
     "buildpacks": [
       {
