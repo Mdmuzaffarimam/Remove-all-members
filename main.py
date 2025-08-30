@@ -18,8 +18,8 @@ from pyrogram.types import InlineKeyboardButton as Button, InlineKeyboardMarkup 
 from pyrogram.errors import FloodWait, RPCError
 
 # Telegram API Credentials
-API_ID = int(environ.get("API_ID", 12345678))  # Replace with your API ID
-API_HASH = environ.get("API_HASH", "")  # Replace with your API Hash
+API_ID = int(environ.get("API_ID", 23631217))  # Replace with your API ID
+API_HASH = environ.get("API_HASH", "567c6df308dc6901790309499f729d12")  # Replace with your API Hash
 BOT_TOKEN = environ.get("BOT_TOKEN", "")  # Replace with your Bot Token
 UNBAN_USERS = environ.get("UNBAN_USERS", "True") == "True"  # Unban users after removing them
 BAN_CMD = ["remove_all", "removeall", "banall", "ban_all"]  # Command to trigger the bot
@@ -40,10 +40,10 @@ async def start(client, message):
         reply_markup=Markup(
             [
                 [
-                    Button("👨‍💻 Developer", url="https://t.me/MrTamilKiD"),
-                    Button("💬 Support", url="https://t.me/KR_BotX"),
+                    Button("👨‍💻 Developer", url="https://t.me/mimam_officialx"),
+                    Button("💬 Support", url="https://t.me/MRN_Chat_Group"),
                 ],
-                [Button("⭐ Source Code", url="https://github.com/MrTamilKiD/TG-Remove-all-members")],
+                [Button("⭐ Source Code", url="https://t.me/mimam_officialx")],
             ]
         ),
         quote=True,
@@ -63,10 +63,10 @@ async def help(client, message):
         reply_markup=Markup(
             [
                 [
-                    Button("👨‍💻 Developer", url="https://t.me/MrTamilKiD"),
-                    Button("💬 Support", url="https://t.me/KR_BotX"),
+                    Button("👨‍💻 Developer", url="https://t.me/mimam_officialx"),
+                    Button("💬 Support", url="https://t.me/MRN_Chat_Group"),
                 ],
-                [Button("⭐ Source Code", url="https://github.com/MrTamilKiD/TG-Remove-all-members")],
+                [Button("⭐ Source Code", url="https://t.me/mimam_officialx")],
             ]
         ),
         disable_web_page_preview=True,
