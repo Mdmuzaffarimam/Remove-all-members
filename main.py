@@ -3,29 +3,55 @@
 # Updates: "For more updates join @KR_BotX"
 # Created on: 2025-03-07
 # Last Updated: 2025-03-07
-#
-# Dependencies:
-#   pyrogram and pyrofork (for Telegram API)
-#   python-dotenv (for environment variables)
-#   Flask (for webhooks, web server)
-#   gunicorn (for deployment)
-#   python 3.6 or higher
 
 import asyncio
+import os
+import threading
 from os import environ
+
+from flask import Flask
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardButton as Button, InlineKeyboardMarkup as Markup
 from pyrogram.errors import FloodWait, RPCError
 
-# Telegram API Credentials
-API_ID = int(environ.get("API_ID", 23631217))  # Replace with your API ID
-API_HASH = environ.get("API_HASH", "")  # Replace with your API Hash
-BOT_TOKEN = environ.get("BOT_TOKEN", "")  # Replace with your Bot Token
-UNBAN_USERS = environ.get("UNBAN_USERS", "True") == "True"  # Unban users after removing them
-BAN_CMD = ["remove_all", "removeall", "banall", "ban_all"]  # Command to trigger the bot
 
-app = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+# =========================
+# 🌐 FLASK WEB SERVER (FOR KOYEB)
+# =========================
+flask_app = Flask(__name__)
 
+@flask_app.route("/")
+def home():
+    return "Bot is alive"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    flask_app.run(host="0.0.0.0", port=port)
+
+threading.Thread(target=run_flask).start()
+
+
+# =========================
+# 🤖 TELEGRAM BOT CONFIG
+# =========================
+API_ID = int(environ.get("API_ID", 23631217))
+API_HASH = environ.get("API_HASH", "")
+BOT_TOKEN = environ.get("BOT_TOKEN", "")
+
+UNBAN_USERS = environ.get("UNBAN_USERS", "True") == "True"
+BAN_CMD = ["remove_all", "removeall", "banall", "ban_all"]
+
+app = Client(
+    "bot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN
+)
+
+
+# =========================
+# 📌 START COMMAND
+# =========================
 @app.on_message(filters.command("start") & filters.private)
 async def start(client, message):
     await message.reply(
@@ -50,6 +76,10 @@ async def start(client, message):
         disable_web_page_preview=True,
     )
 
+
+# =========================
+# 📌 HELP COMMAND
+# =========================
 @app.on_message(filters.command("help") & filters.private)
 async def help(client, message):
     await message.reply(
@@ -73,99 +103,96 @@ async def help(client, message):
         quote=True,
     )
 
+
+# =========================
+# 🚫 REMOVE ALL USERS
+# =========================
 @app.on_message(filters.command(BAN_CMD) & (filters.group | filters.channel))
 async def remove_all_users(client, message):
     chat_id = message.chat.id
-    # Get bot's admin status
+
     bot_admin = await client.get_chat_member(chat_id, "me")
-    # Check if the bot has "Ban Users" permission
     if not bot_admin.privileges or not bot_admin.privileges.can_restrict_members:
         await message.reply("🚨 I need 'Ban Users' permission to remove members!")
         return
 
     count = 0
     update_message = await message.reply(
-        "🔄 Starting to remove members...\n\n⌛ Please wait patiently\n\n🔹 Current progress: 0 members", quote=True
+        "🔄 Starting to remove members...\n\n⌛ Please wait...\n\n🔹 Progress: 0",
+        quote=True
     )
 
     async for member in client.get_chat_members(chat_id):
-        user_id = member.user.id
-
-        # Skip admins & owner
-        if member.status in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+        if member.status in (
+            enums.ChatMemberStatus.ADMINISTRATOR,
+            enums.ChatMemberStatus.OWNER
+        ):
             continue
 
         try:
-            await client.ban_chat_member(chat_id, user_id)
+            await client.ban_chat_member(chat_id, member.user.id)
             count += 1
 
-            # Send an update every 10 users
             if count % 10 == 0:
-                await update_message.edit(f"🔄 Progress Update:\n\n✅ Members removed: {count}\n⏳ Please wait...")
+                await update_message.edit(
+                    f"🔄 Progress Update:\n\n✅ Members removed: {count}"
+                )
 
         except FloodWait as e:
             await asyncio.sleep(e.value)
         except RPCError as e:
-            print(f"Error removing user {user_id}: {e}")
+            print(e)
 
     if UNBAN_USERS:
-        ban_users = []
-        async for member in client.get_chat_members(chat_id, filter=enums.ChatMembersFilter.BANNED):
-            ban_users.append(member.user.id)
-        for user_id in ban_users:
+        async for member in client.get_chat_members(
+            chat_id, filter=enums.ChatMembersFilter.BANNED
+        ):
             try:
-                await client.unban_chat_member(chat_id, user_id)
+                await client.unban_chat_member(chat_id, member.user.id)
             except FloodWait as e:
                 await asyncio.sleep(e.value)
             except RPCError as e:
-                print(f"Error unbanning user {user_id}: {e}")
+                print(e)
 
-    # Final confirmation message
     await update_message.edit(
         f"🎉 Operation Complete!\n\n"
-        f"👥 Total Members Removed: {count}\n"
-        f"✨ Group has been cleaned successfully"
+        f"👥 Total Members Removed: {count}"
     )
 
+
+# =========================
+# 🔓 UNBAN ALL USERS
+# =========================
 @app.on_message(filters.command("unbanall") & (filters.group | filters.channel))
 async def unban_all_users(client, message):
     chat_id = message.chat.id
-    # Get bot's admin status
+
     bot_admin = await client.get_chat_member(chat_id, "me")
-    # Check if the bot has "Ban Users" permission
     if not bot_admin.privileges or not bot_admin.privileges.can_restrict_members:
         await message.reply("🚨 I need 'Ban Users' permission to unban members!")
         return
 
     count = 0
-    unban_all_users = []
-    update_message = await message.reply(
-        "🔄 Starting to unban members...\n\n⌛ Please wait patiently\n\n🔹 Current progress: 0 members", quote=True
-    )
+    msg = await message.reply("🔄 Unbanning members...")
 
-    try:
-        async for member in client.get_chat_members(chat_id, filter=enums.ChatMembersFilter.BANNED):
-            unban_all_users.append(member.user.id)
+    async for member in client.get_chat_members(
+        chat_id, filter=enums.ChatMembersFilter.BANNED
+    ):
+        try:
+            await client.unban_chat_member(chat_id, member.user.id)
             count += 1
-            # Send an update every 10 users
-            if count % 10 == 0:  # Changed to 10 for consistency with remove_all_users
-                await update_message.edit(f"🔄 Progress Update:\n\n✅ Members unbanned: {count}\n⏳ Please wait...")
+        except FloodWait as e:
+            await asyncio.sleep(e.value)
+        except RPCError as e:
+            print(e)
 
-        for user_id in unban_all_users:
-            await client.unban_chat_member(chat_id, user_id)
+    await msg.edit(f"✅ Total users unbanned: {count}")
 
-    except FloodWait as e:
-        await asyncio.sleep(e.value)
-    except RPCError as e:
-        print(f"Error unbanning user {user_id}: {e}")
 
-    # Final confirmation message
-    await update_message.edit(
-        f"🎉 Operation Complete!\n\n"
-        f"👥 Total Members Unbanned: {count}\n"
-        f"✨ Group has been cleaned successfully"
-    )
-
+# =========================
+# 🚀 RUN BOT
+# =========================
 if __name__ == "__main__":
-    print("Bot is running!")
+    print("Bot + Web Server running...")
     app.run()
+
