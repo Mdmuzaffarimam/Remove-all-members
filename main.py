@@ -22,13 +22,20 @@ flask_app = Flask(__name__)
 
 @flask_app.route("/")
 def home():
-    return "Bot is alive"
+    return "Bot is alive!", 200
+
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
-    flask_app.run(host="0.0.0.0", port=port)
+    flask_app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False,
+        use_reloader=False
+    )
 
-threading.Thread(target=run_flask).start()
+# daemon=True => bot band ho to flask bhi clean exit kare
+threading.Thread(target=run_flask, daemon=True).start()
 
 
 # =========================
@@ -90,15 +97,6 @@ async def help(client, message):
         "1️⃣ Make me admin\n"
         "2️⃣ Give 'Ban Users' permission\n"
         "3️⃣ That's it!",
-        reply_markup=Markup(
-            [
-                [
-                    Button("👨‍💻 Developer", url="https://t.me/mimam_officialx"),
-                    Button("💬 Support", url="https://t.me/MRN_Chat_Group"),
-                ],
-                [Button("⭐ Source Code", url="https://t.me/mimam_officialx")],
-            ]
-        ),
         disable_web_page_preview=True,
         quote=True,
     )
@@ -140,8 +138,8 @@ async def remove_all_users(client, message):
 
         except FloodWait as e:
             await asyncio.sleep(e.value)
-        except RPCError as e:
-            print(e)
+        except RPCError:
+            pass
 
     if UNBAN_USERS:
         async for member in client.get_chat_members(
@@ -151,42 +149,13 @@ async def remove_all_users(client, message):
                 await client.unban_chat_member(chat_id, member.user.id)
             except FloodWait as e:
                 await asyncio.sleep(e.value)
-            except RPCError as e:
-                print(e)
+            except RPCError:
+                pass
 
     await update_message.edit(
         f"🎉 Operation Complete!\n\n"
         f"👥 Total Members Removed: {count}"
     )
-
-
-# =========================
-# 🔓 UNBAN ALL USERS
-# =========================
-@app.on_message(filters.command("unbanall") & (filters.group | filters.channel))
-async def unban_all_users(client, message):
-    chat_id = message.chat.id
-
-    bot_admin = await client.get_chat_member(chat_id, "me")
-    if not bot_admin.privileges or not bot_admin.privileges.can_restrict_members:
-        await message.reply("🚨 I need 'Ban Users' permission to unban members!")
-        return
-
-    count = 0
-    msg = await message.reply("🔄 Unbanning members...")
-
-    async for member in client.get_chat_members(
-        chat_id, filter=enums.ChatMembersFilter.BANNED
-    ):
-        try:
-            await client.unban_chat_member(chat_id, member.user.id)
-            count += 1
-        except FloodWait as e:
-            await asyncio.sleep(e.value)
-        except RPCError as e:
-            print(e)
-
-    await msg.edit(f"✅ Total users unbanned: {count}")
 
 
 # =========================
