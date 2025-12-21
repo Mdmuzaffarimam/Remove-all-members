@@ -76,7 +76,7 @@ async def start(client, message):
                     Button("👨‍💻 Developer", url="https://t.me/mimam_officialx"),
                     Button("💬 Support", url="https://t.me/MRN_Chat_Group"),
                 ],
-                [Button("⭐ Source Code", url="https://t.me/mimam_officialx")],
+                [Button("⭐ Source Code", url="https://papajiurl.com/rryy3p")],
             ]
         ),
         quote=True,
