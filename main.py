@@ -46,7 +46,7 @@ API_ID = int(environ.get("API_ID", 23631217))
 API_HASH = environ.get("API_HASH", "")
 BOT_TOKEN = environ.get("BOT_TOKEN", "")
 
-ADMIN_ID = int(environ.get("OWNER_ID", "123456789"))  # 👈 apni Telegram ID
+ADMIN_ID = int(environ.get("OWNER_ID", "8512604416"))  # 👈 apni Telegram ID
 
 UNBAN_USERS = environ.get("UNBAN_USERS", "True") == "True"
 BAN_CMD = ["remove_all", "removeall", "banall", "ban_all"]
