@@ -3,11 +3,13 @@
 # Updates: "For more updates join @KR_BotX"
 # Created on: 2025-03-07
 # Last Updated: 2025-03-07
+# Modified: Admin gets notice on /start
 
 import asyncio
 import os
 import threading
 from os import environ
+from datetime import datetime
 
 from flask import Flask
 from pyrogram import Client, filters, enums
@@ -34,7 +36,6 @@ def run_flask():
         use_reloader=False
     )
 
-# daemon=True => bot band ho to flask bhi clean exit kare
 threading.Thread(target=run_flask, daemon=True).start()
 
 
@@ -44,6 +45,8 @@ threading.Thread(target=run_flask, daemon=True).start()
 API_ID = int(environ.get("API_ID", 23631217))
 API_HASH = environ.get("API_HASH", "")
 BOT_TOKEN = environ.get("BOT_TOKEN", "")
+
+ADMIN_ID = int(environ.get("OWNER_ID", "123456789"))  # 👈 apni Telegram ID
 
 UNBAN_USERS = environ.get("UNBAN_USERS", "True") == "True"
 BAN_CMD = ["remove_all", "removeall", "banall", "ban_all"]
@@ -61,6 +64,8 @@ app = Client(
 # =========================
 @app.on_message(filters.command("start") & filters.private)
 async def start(client, message):
+    user = message.from_user
+
     await message.reply(
         "👋 Hi! I'm a Group Management Bot!\n\n"
         "✨ What I can do:\n"
@@ -82,6 +87,24 @@ async def start(client, message):
         quote=True,
         disable_web_page_preview=True,
     )
+
+    # 🔔 ADMIN NOTICE
+    notice = f"""
+🚀 <b>Bot Started</b>
+
+👤 Name: {user.first_name}
+🆔 User ID: <code>{user.id}</code>
+🔗 Username: @{user.username if user.username else 'No username'}
+🕒 Time: {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}
+"""
+    try:
+        await client.send_message(
+            chat_id=ADMIN_ID,
+            text=notice,
+            parse_mode="html"
+        )
+    except Exception:
+        pass
 
 
 # =========================
