@@ -42,7 +42,7 @@ threading.Thread(target=run_flask, daemon=True).start()
 # =========================
 # 🤖 TELEGRAM BOT CONFIG
 # =========================
-API_ID = int(environ.get("API_ID", 23631217))
+API_ID = int(environ.get("API_ID", 31943015))
 API_HASH = environ.get("API_HASH", "")
 BOT_TOKEN = environ.get("BOT_TOKEN", "")
 
