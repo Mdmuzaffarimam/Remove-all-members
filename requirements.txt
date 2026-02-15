@@ -1,5 +1,5 @@
 Flask
 gunicorn
 pyrofork
-python-dotenv
 TgCrypto
+python-dotenv
