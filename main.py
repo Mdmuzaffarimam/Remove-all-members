@@ -1,5 +1,5 @@
-# Description: Chat ID Auth with Database Locking (Fixes 'Database Locked' Error)
-# Features: Thread-safe SQLite, Whitelist Logic, Flask Keep-Alive
+# Description: Final Fixed Bot (Start Image, DB Lock Fix, Chat ID Auth)
+# Features: Thread-safe DB, Whitelist Logic, Start Photo, Flask Keep-Alive
 # By: MrTamilKiD
 
 import asyncio
@@ -14,13 +14,25 @@ from pyrogram.types import InlineKeyboardButton as Button, InlineKeyboardMarkup 
 from pyrogram.errors import FloodWait
 
 # =========================
-# 🗄️ DATABASE WITH LOCK
+# 🖼️ CONFIGURATION
+# =========================
+# Apni pasand ki image ka direct URL yahan daalein
+START_IMG_URL = "https://telegra.ph/file/a68261770385615037533.jpg"
+
+API_ID = int(environ.get("API_ID", 31943015))
+API_HASH = environ.get("API_HASH", "")
+BOT_TOKEN = environ.get("BOT_TOKEN", "")
+OWNER_ID = int(environ.get("OWNER_ID", "8512604416"))
+UNBAN_USERS = environ.get("UNBAN_USERS", "True") == "True"
+
+# =========================
+# 🗄️ DATABASE WITH LOCK (Fixes 'Database Locked' Error)
 # =========================
 DB_NAME = "allowed_chats.db"
 DB_LOCK = threading.Lock()  # 🔒 Lock create kiya
 
 def init_db():
-    with DB_LOCK:  # 🔒 Lock use kiya
+    with DB_LOCK:
         conn = sqlite3.connect(DB_NAME, check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute('CREATE TABLE IF NOT EXISTS chats (chat_id INTEGER PRIMARY KEY)')
@@ -28,7 +40,7 @@ def init_db():
         conn.close()
 
 def add_chat_db(chat_id):
-    with DB_LOCK:  # 🔒 Lock use kiya
+    with DB_LOCK:
         try:
             conn = sqlite3.connect(DB_NAME, check_same_thread=False)
             cursor = conn.cursor()
@@ -40,7 +52,7 @@ def add_chat_db(chat_id):
             return False
 
 def del_chat_db(chat_id):
-    with DB_LOCK:  # 🔒 Lock use kiya
+    with DB_LOCK:
         conn = sqlite3.connect(DB_NAME, check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute("DELETE FROM chats WHERE chat_id = ?", (chat_id,))
@@ -50,7 +62,7 @@ def del_chat_db(chat_id):
         return changes > 0
 
 def get_allowed_chats():
-    with DB_LOCK:  # 🔒 Lock use kiya
+    with DB_LOCK:
         conn = sqlite3.connect(DB_NAME, check_same_thread=False)
         cursor = conn.cursor()
         cursor.execute("SELECT chat_id FROM chats")
@@ -58,7 +70,6 @@ def get_allowed_chats():
         conn.close()
         return [row[0] for row in rows]
 
-# Initialize DB
 init_db()
 
 # =========================
@@ -77,14 +88,8 @@ def run_flask():
 threading.Thread(target=run_flask, daemon=True).start()
 
 # =========================
-# 🤖 BOT CONFIG
+# 🤖 BOT CLIENT
 # =========================
-API_ID = int(environ.get("API_ID", 31943015))
-API_HASH = environ.get("API_HASH", "")
-BOT_TOKEN = environ.get("BOT_TOKEN", "")
-OWNER_ID = int(environ.get("OWNER_ID", "8512604416"))
-UNBAN_USERS = environ.get("UNBAN_USERS", "True") == "True"
-
 app = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # =========================
@@ -92,9 +97,31 @@ app = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 # =========================
 def is_chat_allowed(chat_id):
     allowed = get_allowed_chats()
-    if chat_id in allowed:
-        return True
-    return False
+    return chat_id in allowed
+
+# =========================
+# 📌 START COMMAND (Fixed & With Image)
+# =========================
+@app.on_message(filters.command("start") & filters.private)
+async def start(client, message):
+    await message.reply_photo(
+        photo=START_IMG_URL,
+        caption=(
+            "👋 **Hi! I'm the Ultimate Group/Channel Cleaner Bot.**\n\n"
+            "I can remove all members from whitelisted groups and channels.\n\n"
+            "**👑 For Owner:**\n"
+            "🔹 `/add` - Add current group/channel to whitelist.\n"
+            "🔹 `/remove` - Remove from whitelist.\n"
+            "🔹 `/list` - See allowed chats.\n\n"
+            "**🛡️ For Admins (in whitelisted chats):**\n"
+            "🔹 `/remove_all` - Remove all members.\n\n"
+            "Check out the links below!"
+        ),
+        reply_markup=Markup([
+            [Button("👨‍💻 Developer", url="https://t.me/mimam_officialx"),
+             Button("📢 Updates", url="https://t.me/KR_BotX")]
+        ])
+    )
 
 # =========================
 # 🎮 OWNER COMMANDS
@@ -143,7 +170,7 @@ async def list_chats(client, message):
 async def remove_all_handler(client, message):
     chat_id = message.chat.id
     
-    # 1. AUTH CHECK
+    # 1. AUTH CHECK (Whitelist)
     if not is_chat_allowed(chat_id):
         return await message.reply(f"❌ **Unauthorized!**\nChat ID `{chat_id}` is not in the whitelist.\nAsk Owner to `/add` this chat.")
 
@@ -164,7 +191,7 @@ async def remove_all_handler(client, message):
     # 4. CONFIRMATION
     user_id = message.from_user.id if message.from_user else 0
     await message.reply(
-        "⚠️ **CONFIRMATION** ⚠️\n\nRun Cleaner?",
+        "⚠️ **CONFIRMATION** ⚠️\n\nAre you sure you want to remove **ALL** members? Admins will be saved.",
         reply_markup=Markup([
             [Button("✅ Yes", callback_data=f"ban_yes_{user_id}"),
              Button("❌ No", callback_data=f"ban_no_{user_id}")]
@@ -180,7 +207,7 @@ async def ban_callback(client, callback: CallbackQuery):
 
     if action == "no": return await callback.message.edit("❌ Cancelled.")
 
-    msg = await callback.message.edit("🚀 **Processing...**")
+    msg = await callback.message.edit("🚀 **Processing...**\n🛡️ Admins are safe.")
     count = 0
     
     async for member in client.get_chat_members(callback.message.chat.id):
@@ -196,12 +223,13 @@ async def ban_callback(client, callback: CallbackQuery):
             pass 
 
     if UNBAN_USERS:
-        await msg.edit(f"✅ Removed {count}. Unbanning...")
+        await msg.edit(f"✅ Removed {count}. Unbanning to clear blocked list...")
         async for member in client.get_chat_members(callback.message.chat.id, filter=enums.ChatMembersFilter.BANNED):
             try: await client.unban_chat_member(callback.message.chat.id, member.user.id)
             except: pass
 
-    await msg.edit(f"✅ **Done!** Removed: {count}")
+    await msg.edit(f"✅ **Clean Complete!**\n🗑 Total Removed: {count}")
 
 if __name__ == "__main__":
+    print("Bot Started Successfully!")
     app.run()
