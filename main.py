@@ -17,7 +17,7 @@ from pyrogram.errors import FloodWait
 # 🖼️ CONFIGURATION
 # =========================
 # Apni pasand ki image ka direct URL yahan daalein
-START_IMG_URL = "https://telegra.ph/file/a68261770385615037533.jpg"
+START_IMG_URL = "https://files.catbox.moe/5wxw6n.jpg"
 
 API_ID = int(environ.get("API_ID", 31943015))
 API_HASH = environ.get("API_HASH", "")
