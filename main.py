@@ -119,7 +119,7 @@ async def start(client, message):
         ),
         reply_markup=Markup([
             [Button("👨‍💻 Developer", url="https://t.me/mimam_officialx"),
-             Button("📢 Updates", url="https://t.me/KR_BotX")]
+             Button("📢 Updates", url="https://t.me/Mrn_Officialx")]
         ])
     )
 
