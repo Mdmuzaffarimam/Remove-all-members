@@ -1,6 +1,4 @@
-Flask
-gunicorn
-pyrofork
-python-dotenv
-TgCrypto
 pyrogram
+tgcrypto
+flask
+aiosqlite
