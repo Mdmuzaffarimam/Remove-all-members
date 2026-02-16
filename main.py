@@ -72,12 +72,12 @@ threading.Thread(target=run_flask, daemon=True).start()
 # =========================
 # 🤖 BOT CONFIG
 # =========================
-API_ID = int(environ.get("API_ID", 0))
+API_ID = int(environ.get("API_ID", 31943015))
 API_HASH = environ.get("API_HASH", "")
 BOT_TOKEN = environ.get("BOT_TOKEN", "")
 
 # Owner ID sirf Sudo add karne ke liye rahega, Command use karne ke liye nahi.
-OWNER_ID = int(environ.get("OWNER_ID", "0"))
+OWNER_ID = int(environ.get("OWNER_ID", "8512604416"))
 UNBAN_USERS = environ.get("UNBAN_USERS", "True") == "True"
 
 app = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
