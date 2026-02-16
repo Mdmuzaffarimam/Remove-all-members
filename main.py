@@ -1,5 +1,6 @@
-# Description: Only Sudo Users Can Use (Owner Direct Access Removed)
-# Features: Sudo List Enforcement, SQLite DB, Channel Support
+# Description: Chat ID Based Auth (No User Limit)
+# Features: Whitelist Groups/Channels, Admin Check
+# By: MrTamilKiD
 
 import asyncio
 import os
@@ -13,41 +14,41 @@ from pyrogram.types import InlineKeyboardButton as Button, InlineKeyboardMarkup 
 from pyrogram.errors import FloodWait
 
 # =========================
-# 🗄️ DATABASE (Sudoers)
+# 🗄️ DATABASE (Allowed Chats)
 # =========================
-DB_NAME = "sudoers.db"
+DB_NAME = "allowed_chats.db"
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('CREATE TABLE IF NOT EXISTS sudoers (user_id INTEGER PRIMARY KEY)')
+    cursor.execute('CREATE TABLE IF NOT EXISTS chats (chat_id INTEGER PRIMARY KEY)')
     conn.commit()
     conn.close()
 
-def add_sudo(user_id):
+def add_chat_db(chat_id):
     try:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO sudoers (user_id) VALUES (?)", (user_id,))
+        cursor.execute("INSERT INTO chats (chat_id) VALUES (?)", (chat_id,))
         conn.commit()
         conn.close()
         return True
     except sqlite3.IntegrityError:
         return False
 
-def del_sudo(user_id):
+def del_chat_db(chat_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM sudoers WHERE user_id = ?", (user_id,))
+    cursor.execute("DELETE FROM chats WHERE chat_id = ?", (chat_id,))
     changes = conn.total_changes
     conn.commit()
     conn.close()
     return changes > 0
 
-def get_sudoers():
+def get_allowed_chats():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM sudoers")
+    cursor.execute("SELECT chat_id FROM chats")
     rows = cursor.fetchall()
     conn.close()
     return [row[0] for row in rows]
@@ -61,7 +62,7 @@ flask_app = Flask(__name__)
 
 @flask_app.route("/")
 def home():
-    return "Bot is Running!", 200
+    return "Bot is Running (Chat ID Auth Mode)!", 200
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
@@ -72,90 +73,105 @@ threading.Thread(target=run_flask, daemon=True).start()
 # =========================
 # 🤖 BOT CONFIG
 # =========================
-API_ID = int(environ.get("API_ID", 31943015))
+API_ID = int(environ.get("API_ID", 0))
 API_HASH = environ.get("API_HASH", "")
 BOT_TOKEN = environ.get("BOT_TOKEN", "")
-
-# Owner ID sirf Sudo add karne ke liye rahega, Command use karne ke liye nahi.
-OWNER_ID = int(environ.get("OWNER_ID", "8512604416"))
+OWNER_ID = int(environ.get("OWNER_ID", "0"))
 UNBAN_USERS = environ.get("UNBAN_USERS", "True") == "True"
 
 app = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # =========================
-# 🔐 AUTH CHECK (Strictly Sudo Only)
+# 🔐 AUTH CHECK (Chat ID Logic)
 # =========================
-def is_sudo_user(user_id):
-    # Yahan se Owner ID ka check hata diya hai.
-    # Sirf wahi use karega jo Database mein hai.
-    sudoers = get_sudoers()
-    if user_id in sudoers:
+def is_chat_allowed(chat_id):
+    # Check karega ki yeh Group/Channel database mein hai ya nahi
+    allowed = get_allowed_chats()
+    if chat_id in allowed:
         return True
     return False
 
 # =========================
-# 🎮 COMMANDS
+# 🎮 OWNER COMMANDS (Add/Remove Chats)
 # =========================
-@app.on_message(filters.command("start") & filters.private)
-async def start(client, message):
-    await message.reply(
-        "👋 **Sudo Restricted Bot**\n\n"
-        "Sirf Sudo users hi `/remove_all` use kar sakte hain.\n"
-        "Agar aap Owner hain, toh pehle khud ko add karein.",
-        reply_markup=Markup([[Button("Developer", url="https://t.me/mimam_officialx")]])
-    )
-
-# --- Sudo Management (Sirf Owner Naye Sudo Bana Sakta Hai) ---
-@app.on_message(filters.command("addsudo") & filters.user(OWNER_ID))
-async def add_sudo_cmd(client, message):
-    if len(message.command) < 2 and not message.reply_to_message:
-        return await message.reply("⚠️ **Important:** Pehle apni ID add karein.\nUse: `/addsudo <Your_ID>`")
+@app.on_message(filters.command("add") & filters.user(OWNER_ID))
+async def add_chat_cmd(client, message):
+    # Ya toh current chat add karo, ya command ke saath ID do
+    # Usage: /add (in group) OR /add -100123456789 (in private)
     
-    user_id = message.reply_to_message.from_user.id if message.reply_to_message else int(message.command[1])
+    if len(message.command) > 1:
+        try:
+            target_id = int(message.command[1])
+        except:
+            return await message.reply("❌ Invalid ID format.")
+    else:
+        target_id = message.chat.id
+
+    if add_chat_db(target_id):
+        await message.reply(f"✅ **Authorized!**\nChat ID `{target_id}` ab allowed hai.")
+    else:
+        await message.reply(f"⚠️ Chat ID `{target_id}` pehle se allowed hai.")
+
+@app.on_message(filters.command("remove") & filters.user(OWNER_ID))
+async def del_chat_cmd(client, message):
+    if len(message.command) > 1:
+        try:
+            target_id = int(message.command[1])
+        except:
+            return await message.reply("❌ Invalid ID format.")
+    else:
+        target_id = message.chat.id
+
+    if del_chat_db(target_id):
+        await message.reply(f"❌ **Removed!**\nChat ID `{target_id}` ab use nahi kar payega.")
+    else:
+        await message.reply("⚠️ Yeh ID list mein nahi mili.")
+
+@app.on_message(filters.command("list") & filters.user(OWNER_ID))
+async def list_chats(client, message):
+    chats = get_allowed_chats()
+    if not chats: return await message.reply("📂 No authorized chats.")
     
-    if add_sudo(user_id): 
-        await message.reply(f"✅ User {user_id} ab bot use kar sakta hai.")
-    else: 
-        await message.reply("⚠️ Yeh user pehle se list mein hai.")
-
-@app.on_message(filters.command("delsudo") & filters.user(OWNER_ID))
-async def del_sudo_cmd(client, message):
-    if len(message.command) < 2: return await message.reply("Format: `/delsudo UserID`")
-    if del_sudo(int(message.command[1])): await message.reply("❌ Access Removed.")
-    else: await message.reply("⚠️ User list mein nahi mila.")
-
-@app.on_message(filters.command("sudolist"))
-async def list_sudo(client, message):
-    # List koi bhi dekh sakta hai, par edit nahi kar sakta
-    users = get_sudoers()
-    if not users: return await message.reply("📂 List Empty hai.")
-    await message.reply("👮‍♂️ **Authorized Sudo Users:**\n" + "\n".join([f"`{u}`" for u in users]))
+    text = "📋 **Authorized Chats:**\n\n"
+    for cid in chats:
+        text += f"🆔 `{cid}`\n"
+    await message.reply(text)
 
 # =========================
-# 🚫 REMOVE ALL (Strict Sudo Check)
+# 🚫 BAN ALL LOGIC (Chat ID + Local Admin)
 # =========================
 @app.on_message(filters.command(["remove_all", "banall"]) & (filters.group | filters.channel))
 async def remove_all_handler(client, message):
     chat_id = message.chat.id
     
-    # 1. AUTH CHECK
-    user_id = message.from_user.id if message.from_user else 0
-    
-    # Agar user Sudo List mein nahi hai, toh mana kar do
-    # (Anonymous channel admins ke liye user_id 0 hota hai, unhe allow karne ke liye logic alag hai,
-    # par strict mode mein hum assume karte hain command user se aayi hai)
-    if user_id != 0 and not is_sudo_user(user_id):
-        return await message.reply("❌ **Access Denied!**\nAap Sudo List mein nahi hain. Owner se contact karein.")
+    # 1. CHAT AUTHORIZATION CHECK (Database)
+    if not is_chat_allowed(chat_id):
+        return await message.reply(
+            f"❌ **Access Denied!**\n"
+            f"Yeh Chat (ID: `{chat_id}`) authorized nahi hai.\n"
+            f"Owner se contact karke ID add karwayein."
+        )
 
-    # 2. Permission Check
+    # 2. ADMIN CHECK (Sirf Group ke liye)
+    # Channel mein toh sirf admin hi post kar sakta hai, toh check ki zaroorat nahi.
+    # Group mein check karna padega ki command dene wala Group Admin hai ya nahi.
+    if message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
+        member = await client.get_chat_member(chat_id, message.from_user.id)
+        if member.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+             return await message.reply("❌ **Access Denied!**\nAap is Group ke Admin nahi hain.")
+
+    # 3. BOT PERMISSION CHECK
     try:
-        bot_member = await client.get_chat_member(chat_id, "me")
-        if not bot_member.privileges.can_restrict_members:
+        bot = await client.get_chat_member(chat_id, "me")
+        if not bot.privileges.can_restrict_members:
             return await message.reply("🚨 Mujhe 'Ban Users' permission do!")
     except:
         return await message.reply("🚨 Main Admin nahi hoon!")
 
-    # 3. Confirmation
+    # 4. CONFIRMATION
+    # Channel posts ke liye user_id 0 set karenge
+    user_id = message.from_user.id if message.from_user else 0
+    
     await message.reply(
         "⚠️ **CONFIRMATION** ⚠️\n\n"
         "Kya aap sabko nikalna chahte hain?",
@@ -169,14 +185,14 @@ async def remove_all_handler(client, message):
 async def ban_callback(client, callback: CallbackQuery):
     action, auth_user = callback.data.split("_")[1], int(callback.data.split("_")[2])
     
-    # Callback check: Sirf wahi click kare jo sudo list mein tha
+    # Verification: Sirf wahi dabaye jisne command di (Channel mein skip)
     if auth_user != 0 and callback.from_user.id != auth_user:
         return await callback.answer("Not for you!", show_alert=True)
 
     if action == "no":
         return await callback.message.edit("❌ Cancelled.")
 
-    # Execution
+    # START CLEANING
     msg = await callback.message.edit("🚀 **Working...**")
     count = 0
     
