@@ -22,7 +22,7 @@ START_IMG_URL = "https://files.catbox.moe/5wxw6n.jpg"
 API_ID = int(environ.get("API_ID", 31943015))
 API_HASH = environ.get("API_HASH", "")
 BOT_TOKEN = environ.get("BOT_TOKEN", "")
-OWNER_ID = int(environ.get("OWNER_ID", "8512604416"))
+OWNER_ID = int(environ.get("OWNER_ID", "6139759254"))
 UNBAN_USERS = environ.get("UNBAN_USERS", "True") == "True"
 
 # =========================
