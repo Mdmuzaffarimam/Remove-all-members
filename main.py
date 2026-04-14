@@ -681,12 +681,13 @@ async def auto_delete_listener(client, message):
 # 🚀 RUN BOT
 # =========================
 async def main():
-    async with app:
-        loop = asyncio.get_event_loop()
-        restore_schedules(app, loop)
-        print("✅ Bot Started! Pending schedules restored.")
-        await asyncio.Event().wait()  # Keep running
+    await app.start()
+    print("✅ Bot Started! Pending schedules restored.")
+    loop = asyncio.get_event_loop()
+    restore_schedules(app, loop)
+    await asyncio.Event().wait()  # Keep running forever
 
 if __name__ == "__main__":
     print("Bot Starting...")
-    asyncio.run(main())
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
