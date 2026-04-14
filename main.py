@@ -31,12 +31,35 @@ UNBAN_USERS = environ.get("UNBAN_USERS", "True") == "True"
 DB_NAME = "allowed_chats.db"
 DB_LOCK = threading.Lock()
 
-def init_db():
+# Single persistent connection with WAL mode — fixes "database is locked"
+_db_conn = None
+
+def get_conn():
+    global _db_conn
+    if _db_conn is None:
+        _db_conn = sqlite3.connect(DB_NAME, check_same_thread=False)
+        _db_conn.execute("PRAGMA journal_mode=WAL")   # WAL = no lock conflicts
+        _db_conn.execute("PRAGMA synchronous=NORMAL")
+        _db_conn.execute("PRAGMA busy_timeout=5000")  # wait 5s before failing
+    return _db_conn
+
+def db_execute(query, params=(), fetch=False):
+    """Thread-safe DB execute. Returns rows if fetch=True."""
     with DB_LOCK:
-        conn = sqlite3.connect(DB_NAME, check_same_thread=False)
+        conn = get_conn()
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        if fetch:
+            result = cursor.fetchall()
+            return result
+        conn.commit()
+        return cursor.rowcount
+
+def init_db():
+    conn = get_conn()
+    with DB_LOCK:
         cursor = conn.cursor()
         cursor.execute('CREATE TABLE IF NOT EXISTS chats (chat_id INTEGER PRIMARY KEY)')
-        # Scheduled tasks table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS scheduled_tasks (
                 chat_id INTEGER PRIMARY KEY,
@@ -44,7 +67,6 @@ def init_db():
                 requested_by INTEGER NOT NULL
             )
         ''')
-        # Auto-delete settings table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS autodelete_settings (
                 chat_id INTEGER PRIMARY KEY,
@@ -53,116 +75,67 @@ def init_db():
             )
         ''')
         conn.commit()
-        conn.close()
 
 # =========================
 # 🗑️ AUTO-DELETE DB FUNCTIONS
 # =========================
 def set_autodelete(chat_id, delay_seconds, enabled=True):
-    with DB_LOCK:
-        conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT OR REPLACE INTO autodelete_settings (chat_id, delay_seconds, enabled) VALUES (?, ?, ?)",
-            (chat_id, delay_seconds, 1 if enabled else 0)
-        )
-        conn.commit()
-        conn.close()
+    db_execute(
+        "INSERT OR REPLACE INTO autodelete_settings (chat_id, delay_seconds, enabled) VALUES (?, ?, ?)",
+        (chat_id, delay_seconds, 1 if enabled else 0)
+    )
 
 def toggle_autodelete(chat_id, enabled: bool):
-    with DB_LOCK:
-        conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO autodelete_settings (chat_id, delay_seconds, enabled) VALUES (?, 60, ?) "
-            "ON CONFLICT(chat_id) DO UPDATE SET enabled=?",
-            (chat_id, 1 if enabled else 0, 1 if enabled else 0)
-        )
-        conn.commit()
-        conn.close()
+    db_execute(
+        "INSERT INTO autodelete_settings (chat_id, delay_seconds, enabled) VALUES (?, 60, ?) "
+        "ON CONFLICT(chat_id) DO UPDATE SET enabled=?",
+        (chat_id, 1 if enabled else 0, 1 if enabled else 0)
+    )
 
 def get_autodelete(chat_id):
-    """Returns (delay_seconds, enabled) or None if not set."""
-    with DB_LOCK:
-        conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute("SELECT delay_seconds, enabled FROM autodelete_settings WHERE chat_id = ?", (chat_id,))
-        row = cursor.fetchone()
-        conn.close()
-        return row  # (delay_seconds, enabled) or None
+    rows = db_execute(
+        "SELECT delay_seconds, enabled FROM autodelete_settings WHERE chat_id = ?",
+        (chat_id,), fetch=True
+    )
+    return rows[0] if rows else None
 
 def add_chat_db(chat_id):
-    with DB_LOCK:
-        try:
-            conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO chats (chat_id) VALUES (?)", (chat_id,))
-            conn.commit()
-            conn.close()
-            return True
-        except sqlite3.IntegrityError:
-            return False
+    try:
+        db_execute("INSERT INTO chats (chat_id) VALUES (?)", (chat_id,))
+        return True
+    except sqlite3.IntegrityError:
+        return False
 
 def del_chat_db(chat_id):
-    with DB_LOCK:
-        conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM chats WHERE chat_id = ?", (chat_id,))
-        changes = conn.total_changes
-        conn.commit()
-        conn.close()
-        return changes > 0
+    rows = db_execute("DELETE FROM chats WHERE chat_id = ?", (chat_id,))
+    return rows > 0
 
 def get_allowed_chats():
-    with DB_LOCK:
-        conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute("SELECT chat_id FROM chats")
-        rows = cursor.fetchall()
-        conn.close()
-        return [row[0] for row in rows]
+    rows = db_execute("SELECT chat_id FROM chats", fetch=True)
+    return [r[0] for r in rows]
 
 # =========================
 # ⏰ SCHEDULER DB FUNCTIONS
 # =========================
 def add_schedule(chat_id, run_at: datetime, requested_by: int):
-    with DB_LOCK:
-        conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT OR REPLACE INTO scheduled_tasks (chat_id, run_at, requested_by) VALUES (?, ?, ?)",
-            (chat_id, run_at.isoformat(), requested_by)
-        )
-        conn.commit()
-        conn.close()
+    db_execute(
+        "INSERT OR REPLACE INTO scheduled_tasks (chat_id, run_at, requested_by) VALUES (?, ?, ?)",
+        (chat_id, run_at.isoformat(), requested_by)
+    )
 
 def del_schedule(chat_id):
-    with DB_LOCK:
-        conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM scheduled_tasks WHERE chat_id = ?", (chat_id,))
-        changes = conn.total_changes
-        conn.commit()
-        conn.close()
-        return changes > 0
+    rows = db_execute("DELETE FROM scheduled_tasks WHERE chat_id = ?", (chat_id,))
+    return rows > 0
 
 def get_all_schedules():
-    with DB_LOCK:
-        conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute("SELECT chat_id, run_at, requested_by FROM scheduled_tasks")
-        rows = cursor.fetchall()
-        conn.close()
-        return rows
+    return db_execute("SELECT chat_id, run_at, requested_by FROM scheduled_tasks", fetch=True)
 
 def get_schedule(chat_id):
-    with DB_LOCK:
-        conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-        cursor = conn.cursor()
-        cursor.execute("SELECT run_at, requested_by FROM scheduled_tasks WHERE chat_id = ?", (chat_id,))
-        row = cursor.fetchone()
-        conn.close()
-        return row
+    rows = db_execute(
+        "SELECT run_at, requested_by FROM scheduled_tasks WHERE chat_id = ?",
+        (chat_id,), fetch=True
+    )
+    return rows[0] if rows else None
 
 init_db()
 
