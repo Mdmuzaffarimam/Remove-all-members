@@ -1,15 +1,13 @@
-# Description: Final Fixed Bot - Channel Friendly
-# Features: Thread-safe DB (WAL), Whitelist, Start Photo, Flask Keep-Alive,
-#            Scheduled Remove, Auto-Delete Messages, Full Channel Support
+# Description: Final Bot - MongoDB + delall/delfrom + Auto-Delete + Schedule Remove
 # By: MrTamilKiD
 
 import asyncio
 import os
-import sqlite3
 import threading
 from datetime import datetime, timedelta
 from os import environ
 
+from pymongo import MongoClient
 from flask import Flask
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardButton as Button, InlineKeyboardMarkup as Markup, CallbackQuery
@@ -20,118 +18,95 @@ from pyrogram.errors import FloodWait
 # =========================
 START_IMG_URL = "https://files.catbox.moe/5wxw6n.jpg"
 
-API_ID    = int(environ.get("API_ID", 31943015))
-API_HASH  = environ.get("API_HASH", "")
-BOT_TOKEN = environ.get("BOT_TOKEN", "")
-OWNER_ID  = int(environ.get("OWNER_ID", "6139759254"))
-UNBAN_USERS = environ.get("UNBAN_USERS", "True") == "True"
+API_ID       = int(environ.get("API_ID", 0))
+API_HASH     = environ.get("API_HASH", "")
+BOT_TOKEN    = environ.get("BOT_TOKEN", "")
+OWNER_ID     = int(environ.get("OWNER_ID", "6139759254"))
+UNBAN_USERS  = environ.get("UNBAN_USERS", "True") == "True"
+MONGODB_URL  = environ.get("MONGODB_URL", "")   # e.g. mongodb+srv://user:pass@cluster.mongodb.net/
 
 # =========================
-# 🗄️ DATABASE (WAL mode — no lock errors)
+# 🗄️ MONGODB SETUP
 # =========================
-DB_NAME  = "allowed_chats.db"
-DB_LOCK  = threading.Lock()
-_db_conn = None
+_mongo_client = None
 
-def get_conn():
-    global _db_conn
-    if _db_conn is None:
-        _db_conn = sqlite3.connect(DB_NAME, check_same_thread=False)
-        _db_conn.execute("PRAGMA journal_mode=WAL")
-        _db_conn.execute("PRAGMA synchronous=NORMAL")
-        _db_conn.execute("PRAGMA busy_timeout=5000")
-    return _db_conn
+def get_db():
+    global _mongo_client
+    if _mongo_client is None:
+        if not MONGODB_URL:
+            raise RuntimeError("MONGODB_URL environment variable not set!")
+        _mongo_client = MongoClient(MONGODB_URL)
+    return _mongo_client["cleanerbot"]   # database name
 
-def db_execute(query, params=(), fetch=False):
-    with DB_LOCK:
-        conn = get_conn()
-        cur  = conn.cursor()
-        cur.execute(query, params)
-        if fetch:
-            return cur.fetchall()
-        conn.commit()
-        return cur.rowcount
+# Collections
+def col_chats():
+    return get_db()["chats"]
 
-def init_db():
-    with DB_LOCK:
-        conn = get_conn()
-        cur  = conn.cursor()
-        cur.executescript("""
-            CREATE TABLE IF NOT EXISTS chats (
-                chat_id INTEGER PRIMARY KEY
-            );
-            CREATE TABLE IF NOT EXISTS scheduled_tasks (
-                chat_id      INTEGER PRIMARY KEY,
-                run_at       TEXT    NOT NULL,
-                requested_by INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS autodelete_settings (
-                chat_id       INTEGER PRIMARY KEY,
-                delay_seconds INTEGER NOT NULL DEFAULT 60,
-                enabled       INTEGER NOT NULL DEFAULT 0
-            );
-        """)
-        conn.commit()
+def col_schedules():
+    return get_db()["scheduled_tasks"]
 
-init_db()
+def col_autodelete():
+    return get_db()["autodelete_settings"]
 
 # ── Whitelist ──────────────────────────────────────────────
 def add_chat_db(chat_id):
-    try:
-        db_execute("INSERT INTO chats (chat_id) VALUES (?)", (chat_id,))
-        return True
-    except sqlite3.IntegrityError:
+    if col_chats().find_one({"chat_id": chat_id}):
         return False
+    col_chats().insert_one({"chat_id": chat_id})
+    return True
 
 def del_chat_db(chat_id):
-    return db_execute("DELETE FROM chats WHERE chat_id=?", (chat_id,)) > 0
+    result = col_chats().delete_one({"chat_id": chat_id})
+    return result.deleted_count > 0
 
 def get_allowed_chats():
-    return [r[0] for r in db_execute("SELECT chat_id FROM chats", fetch=True)]
+    return [doc["chat_id"] for doc in col_chats().find()]
 
 def is_chat_allowed(chat_id):
-    return chat_id in get_allowed_chats()
+    return bool(col_chats().find_one({"chat_id": chat_id}))
 
 # ── Scheduled tasks ────────────────────────────────────────
 def add_schedule(chat_id, run_at: datetime, requested_by: int):
-    db_execute(
-        "INSERT OR REPLACE INTO scheduled_tasks (chat_id, run_at, requested_by) VALUES (?,?,?)",
-        (chat_id, run_at.isoformat(), requested_by)
+    col_schedules().update_one(
+        {"chat_id": chat_id},
+        {"$set": {"run_at": run_at.isoformat(), "requested_by": requested_by}},
+        upsert=True
     )
 
 def del_schedule(chat_id):
-    return db_execute("DELETE FROM scheduled_tasks WHERE chat_id=?", (chat_id,)) > 0
+    result = col_schedules().delete_one({"chat_id": chat_id})
+    return result.deleted_count > 0
 
 def get_all_schedules():
-    return db_execute("SELECT chat_id, run_at, requested_by FROM scheduled_tasks", fetch=True)
+    docs = col_schedules().find()
+    return [(d["chat_id"], d["run_at"], d["requested_by"]) for d in docs]
 
 def get_schedule(chat_id):
-    rows = db_execute(
-        "SELECT run_at, requested_by FROM scheduled_tasks WHERE chat_id=?",
-        (chat_id,), fetch=True
-    )
-    return rows[0] if rows else None
+    doc = col_schedules().find_one({"chat_id": chat_id})
+    if not doc:
+        return None
+    return (doc["run_at"], doc["requested_by"])
 
 # ── Auto-delete settings ───────────────────────────────────
 def set_autodelete(chat_id, delay_seconds, enabled=True):
-    db_execute(
-        "INSERT OR REPLACE INTO autodelete_settings (chat_id, delay_seconds, enabled) VALUES (?,?,?)",
-        (chat_id, delay_seconds, 1 if enabled else 0)
+    col_autodelete().update_one(
+        {"chat_id": chat_id},
+        {"$set": {"delay_seconds": delay_seconds, "enabled": enabled}},
+        upsert=True
     )
 
 def toggle_autodelete(chat_id, enabled: bool):
-    db_execute(
-        "INSERT INTO autodelete_settings (chat_id, delay_seconds, enabled) VALUES (?,60,?) "
-        "ON CONFLICT(chat_id) DO UPDATE SET enabled=?",
-        (chat_id, 1 if enabled else 0, 1 if enabled else 0)
+    col_autodelete().update_one(
+        {"chat_id": chat_id},
+        {"$set": {"enabled": enabled}, "$setOnInsert": {"delay_seconds": 60}},
+        upsert=True
     )
 
 def get_autodelete(chat_id):
-    rows = db_execute(
-        "SELECT delay_seconds, enabled FROM autodelete_settings WHERE chat_id=?",
-        (chat_id,), fetch=True
-    )
-    return rows[0] if rows else None
+    doc = col_autodelete().find_one({"chat_id": chat_id})
+    if not doc:
+        return None
+    return (doc["delay_seconds"], doc["enabled"])
 
 # =========================
 # ⏱️ IN-MEMORY TASK TRACKER
@@ -159,7 +134,7 @@ threading.Thread(target=run_flask, daemon=True).start()
 app = Client("bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # =========================
-# 🔥 CORE REMOVE LOGIC
+# 🔥 CORE REMOVE ALL MEMBERS
 # =========================
 async def do_remove_all(client: Client, chat_id: int, notify_msg=None):
     count = 0
@@ -199,12 +174,10 @@ async def scheduled_remove_task(client: Client, chat_id: int, delay_seconds: flo
     await asyncio.sleep(delay_seconds)
     del_schedule(chat_id)
     active_tasks.pop(chat_id, None)
-
     if not is_chat_allowed(chat_id):
         return
-
     try:
-        msg   = await client.send_message(chat_id, "⏰ **Scheduled Remove Started!**\n🛡️ Admins are safe.")
+        msg   = await client.send_message(chat_id, "⏰ **Scheduled Remove Started!**\n🛡️ Admins safe hain.")
         count = await do_remove_all(client, chat_id, notify_msg=msg)
         await msg.edit(f"✅ **Scheduled Clean Complete!**\n🗑 Total Removed: **{count}**")
     except Exception as e:
@@ -229,17 +202,20 @@ async def start(client, message):
     await message.reply_photo(
         photo=START_IMG_URL,
         caption=(
-            "👋 **Hi! I'm the Ultimate Group/Channel Cleaner Bot.**\n\n"
+            "👋 **Hi! I'm the Ultimate Channel Cleaner Bot.**\n\n"
             "**👑 Owner Commands (PM):**\n"
             "🔹 `/add <chat_id>` — Whitelist mein add karo\n"
             "🔹 `/remove <chat_id>` — Whitelist se hatao\n"
             "🔹 `/list` — Allowed chats dekho\n\n"
-            "**📢 Channel/Group Commands:**\n"
+            "**📢 Channel Commands:**\n"
             "🔹 `/remove_all` — Sabhi members remove karo\n"
             "🔹 `/schedule_remove <minutes>` — X mins baad auto remove\n"
             "🔹 `/cancel_remove` — Scheduled remove cancel karo\n"
             "🔹 `/check_schedule` — Timer status dekho\n\n"
-            "**🗑️ Auto-Delete Messages:**\n"
+            "**🗑️ Message Delete Commands:**\n"
+            "🔹 `/delall` — Channel ke SAARE messages delete karo\n"
+            "🔹 `/delfrom` — Reply karke bhejo, us se aage sab delete\n\n"
+            "**⏱️ Auto-Delete:**\n"
             "🔹 `/settime 10 s` → 10 sec baad delete\n"
             "🔹 `/settime 5 m` → 5 min baad delete\n"
             "🔹 `/settime 1 h` → 1 hour baad delete\n"
@@ -292,16 +268,166 @@ async def list_chats(client, message):
     await message.reply(text)
 
 # =========================
+# 🗑️ DELETE ALL MESSAGES — /delall
+# =========================
+@app.on_message(filters.command("delall") & (filters.group | filters.channel))
+async def delall_cmd(client, message):
+    chat_id = message.chat.id
+
+    if not is_chat_allowed(chat_id):
+        return await message.reply(f"❌ **Unauthorized!**\nChat ID `{chat_id}` whitelist mein nahi hai.")
+
+    user_id = message.from_user.id if message.from_user else 0
+    await message.reply(
+        "⚠️ **CONFIRMATION** ⚠️\n\n"
+        "Channel ke **SAARE messages** delete karne hain?\n"
+        "Yeh action **UNDO nahi ho sakta!**",
+        reply_markup=Markup([
+            [Button("✅ Haan, Delete Karo", callback_data=f"delall_yes_{user_id}"),
+             Button("❌ Cancel",            callback_data=f"delall_no_{user_id}")]
+        ])
+    )
+
+@app.on_callback_query(filters.regex(r"^delall_(yes|no)_"))
+async def delall_callback(client, callback: CallbackQuery):
+    parts     = callback.data.split("_")
+    action    = parts[1]
+    auth_user = int(parts[2])
+
+    if auth_user != 0 and callback.from_user.id != auth_user:
+        return await callback.answer("Yeh tumhare liye nahi hai!", show_alert=True)
+
+    if action == "no":
+        return await callback.message.edit("❌ Cancelled.")
+
+    chat_id     = callback.message.chat.id
+    msg         = await callback.message.edit("🗑️ **Deleting all messages...**")
+    count       = 0
+    current_id  = callback.message.id
+    batch       = []
+
+    for msg_id in range(1, current_id + 1):
+        batch.append(msg_id)
+        if len(batch) == 100:
+            try:
+                deleted = await client.delete_messages(chat_id, batch)
+                count += deleted
+            except FloodWait as e:
+                await asyncio.sleep(e.value)
+            except Exception:
+                pass
+            batch = []
+            if count % 500 == 0 and count > 0:
+                try:
+                    await msg.edit(f"🗑️ Deleted {count} messages...")
+                except Exception:
+                    pass
+
+    if batch:
+        try:
+            deleted = await client.delete_messages(chat_id, batch)
+            count += deleted
+        except Exception:
+            pass
+
+    try:
+        await msg.edit(f"✅ **Delete Complete!**\n🗑 Messages Deleted: **{count}**")
+    except Exception:
+        pass
+
+# =========================
+# 🗑️ DELETE FROM MESSAGE — /delfrom
+# =========================
+@app.on_message(filters.command("delfrom") & (filters.group | filters.channel))
+async def delfrom_cmd(client, message):
+    chat_id = message.chat.id
+
+    if not is_chat_allowed(chat_id):
+        return await message.reply(f"❌ **Unauthorized!**\nChat ID `{chat_id}` whitelist mein nahi hai.")
+
+    if not message.reply_to_message:
+        return await message.reply(
+            "ℹ️ **Usage:** Kisi message ko reply karke `/delfrom` bhejo.\n"
+            "Us message se lekar aage ke sab delete ho jayenge."
+        )
+
+    from_msg_id = message.reply_to_message.id
+    current_id  = message.id
+    user_id     = message.from_user.id if message.from_user else 0
+
+    await message.reply(
+        f"⚠️ **CONFIRMATION** ⚠️\n\n"
+        f"Message ID `{from_msg_id}` se lekar aage ke **saare messages** delete karne hain?",
+        reply_markup=Markup([
+            [Button("✅ Haan, Delete Karo", callback_data=f"delfrom_yes_{user_id}_{from_msg_id}_{current_id}"),
+             Button("❌ Cancel",            callback_data=f"delfrom_no_{user_id}")]
+        ])
+    )
+
+@app.on_callback_query(filters.regex(r"^delfrom_(yes|no)_"))
+async def delfrom_callback(client, callback: CallbackQuery):
+    parts  = callback.data.split("_")
+    action = parts[1]
+
+    if action == "no":
+        auth_user = int(parts[2])
+        if auth_user != 0 and callback.from_user.id != auth_user:
+            return await callback.answer("Yeh tumhare liye nahi hai!", show_alert=True)
+        return await callback.message.edit("❌ Cancelled.")
+
+    auth_user   = int(parts[2])
+    from_msg_id = int(parts[3])
+    current_id  = int(parts[4])
+
+    if auth_user != 0 and callback.from_user.id != auth_user:
+        return await callback.answer("Yeh tumhare liye nahi hai!", show_alert=True)
+
+    chat_id = callback.message.chat.id
+    msg     = await callback.message.edit(f"🗑️ **Deleting from message {from_msg_id}...**")
+    count   = 0
+    batch   = []
+
+    for msg_id in range(from_msg_id, current_id + 1):
+        batch.append(msg_id)
+        if len(batch) == 100:
+            try:
+                deleted = await client.delete_messages(chat_id, batch)
+                count += deleted
+            except FloodWait as e:
+                await asyncio.sleep(e.value)
+            except Exception:
+                pass
+            batch = []
+            if count % 300 == 0 and count > 0:
+                try:
+                    await msg.edit(f"🗑️ Deleted {count} messages...")
+                except Exception:
+                    pass
+
+    if batch:
+        try:
+            deleted = await client.delete_messages(chat_id, batch)
+            count += deleted
+        except Exception:
+            pass
+
+    try:
+        await msg.edit(
+            f"✅ **Delete Complete!**\n"
+            f"🗑 Messages Deleted: **{count}**\n"
+            f"📍 From Message ID: `{from_msg_id}`"
+        )
+    except Exception:
+        pass
+
+# =========================
 # 🗑️ AUTO-DELETE COMMANDS
-# NOTE: Channel mein koi bhi admin ye commands use kar sakta hai
-#       from_user check nahi hai — channel posts anonymous hote hain
 # =========================
 @app.on_message(filters.command("settime") & (filters.group | filters.channel))
 async def settime_cmd(client, message):
     if len(message.command) < 2:
         return await message.reply(
             "⚠️ **Usage:** `/settime <value> [s/m/h]`\n\n"
-            "**Examples:**\n"
             "• `/settime 10 s` → 10 seconds\n"
             "• `/settime 5 m` → 5 minutes\n"
             "• `/settime 1 h` → 1 hour (max 24h)"
@@ -329,10 +455,9 @@ async def settime_cmd(client, message):
     row     = get_autodelete(message.chat.id)
     enabled = row[1] if row else True
     set_autodelete(message.chat.id, delay, enabled)
-
     await message.reply(
         f"✅ **Auto-Delete delay set to {label}**\n"
-        f"{'🟢 Auto-delete is **enabled**.' if enabled else '🔴 Auto-delete is **disabled**. Use /enable to turn on.'}"
+        f"{'🟢 Auto-delete is **enabled**.' if enabled else '🔴 Auto-delete is **disabled**. Use /enable.'}"
     )
 
 @app.on_message(filters.command(["gettime", "delayinfo"]) & (filters.group | filters.channel))
@@ -354,7 +479,7 @@ async def enable_cmd(client, message):
     row = get_autodelete(message.chat.id)
     d   = row[0] if row else 60
     ts  = f"{d}s" if d < 60 else (f"{d//60}m" if d < 3600 else f"{d//3600}h")
-    await message.reply(f"🟢 **Auto-Delete Enabled!**\nMessages will delete after **{ts}**.")
+    await message.reply(f"🟢 **Auto-Delete Enabled!**\nMessages delete after **{ts}**.")
 
 @app.on_message(filters.command("disable") & (filters.group | filters.channel))
 async def disable_cmd(client, message):
@@ -372,30 +497,23 @@ async def show_id_cmd(client, message):
 @app.on_message(filters.command("schedule_remove") & (filters.group | filters.channel))
 async def schedule_remove_cmd(client, message):
     chat_id = message.chat.id
-
     if not is_chat_allowed(chat_id):
-        return await message.reply(
-            f"❌ **Unauthorized!**\nChat ID `{chat_id}` whitelist mein nahi hai.\n"
-            f"Owner se `/add {chat_id}` karne ko kaho."
-        )
+        return await message.reply(f"❌ **Unauthorized!**\nChat ID `{chat_id}` whitelist mein nahi hai.")
 
     if len(message.command) < 2:
         return await message.reply(
             "⚠️ **Usage:** `/schedule_remove <minutes>`\n\n"
-            "**Examples:**\n"
             "• `/schedule_remove 30` → 30 minutes baad\n"
             "• `/schedule_remove 60` → 1 hour baad\n"
             "• `/schedule_remove 1440` → 24 hours baad"
         )
-
     try:
         minutes = int(message.command[1])
         if minutes <= 0:
             raise ValueError
     except ValueError:
-        return await message.reply("❌ Valid positive number do. Example: `/schedule_remove 30`")
+        return await message.reply("❌ Valid number do. Example: `/schedule_remove 30`")
 
-    # Cancel existing if any
     if chat_id in active_tasks:
         active_tasks[chat_id].cancel()
         active_tasks.pop(chat_id, None)
@@ -421,8 +539,7 @@ async def schedule_remove_cmd(client, message):
         f"⏰ **Auto Remove Scheduled!**\n\n"
         f"🕐 Execute in: **{ts}**\n"
         f"📅 At (UTC): `{run_at.strftime('%Y-%m-%d %H:%M:%S')}`\n"
-        f"🛡️ Admins safe rahenge.\n\n"
-        f"Cancel: `/cancel_remove`"
+        f"🛡️ Admins safe rahenge.\n\nCancel: `/cancel_remove`"
     )
 
 @app.on_message(filters.command("cancel_remove") & (filters.group | filters.channel))
@@ -452,21 +569,17 @@ async def check_schedule_cmd(client, message):
     await message.reply(
         f"⏰ **Scheduled Remove Status**\n\n"
         f"📅 Runs at (UTC): `{run_at.strftime('%Y-%m-%d %H:%M:%S')}`\n"
-        f"⏳ Time remaining: **{tl.strip()}**\n\n"
-        f"Cancel: `/cancel_remove`"
+        f"⏳ Time remaining: **{tl.strip()}**\n\nCancel: `/cancel_remove`"
     )
 
 # =========================
-# 🚫 REMOVE ALL (Instant)
+# 🚫 REMOVE ALL MEMBERS
 # =========================
 @app.on_message(filters.command(["remove_all", "banall"]) & (filters.group | filters.channel))
 async def remove_all_handler(client, message):
     chat_id = message.chat.id
-
     if not is_chat_allowed(chat_id):
-        return await message.reply(
-            f"❌ **Unauthorized!**\nChat ID `{chat_id}` whitelist mein nahi hai."
-        )
+        return await message.reply(f"❌ **Unauthorized!**\nChat ID `{chat_id}` whitelist mein nahi hai.")
 
     try:
         bot = await client.get_chat_member(chat_id, "me")
@@ -489,21 +602,16 @@ async def ban_callback(client, callback: CallbackQuery):
     parts     = callback.data.split("_")
     action    = parts[1]
     auth_user = int(parts[2])
-
     if auth_user != 0 and callback.from_user.id != auth_user:
         return await callback.answer("Yeh tumhare liye nahi hai!", show_alert=True)
-
     if action == "no":
         return await callback.message.edit("❌ Cancelled.")
-
     msg   = await callback.message.edit("🚀 **Processing...**\n🛡️ Admins safe hain.")
     count = await do_remove_all(client, callback.message.chat.id, notify_msg=msg)
     await msg.edit(f"✅ **Clean Complete!**\n🗑 Total Removed: **{count}**")
 
 # =========================
 # 🗑️ AUTO-DELETE MESSAGE LISTENER
-# Sirf normal messages delete hote hain
-# Bot ke messages aur commands nahi delete hote
 # =========================
 @app.on_message(filters.group | filters.channel, group=10)
 async def auto_delete_listener(client, message):
@@ -529,7 +637,7 @@ async def auto_delete_listener(client, message):
 # =========================
 async def main():
     await app.start()
-    print("✅ Bot Started! Schedules restored.")
+    print("✅ Bot Started!")
     loop = asyncio.get_event_loop()
     restore_schedules(app, loop)
     await asyncio.Event().wait()
