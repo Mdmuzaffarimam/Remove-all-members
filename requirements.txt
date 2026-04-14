@@ -3,3 +3,4 @@ gunicorn
 pyrofork
 TgCrypto
 python-dotenv
+pymongo[srv]
